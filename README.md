@@ -42,10 +42,10 @@ cp .env.example .env
 
 ```bash
 docker build \
-  --build-arg BASE_IMAGE=docker.m.daocloud.io/library/ubuntu:24.04 \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-  --build-arg PREINSTALL_AGENTS=opencode \
+  --build-arg BASE_IMAGE=$DOCKER_BASE_IMAGE \
+  --build-arg NPM_REGISTRY=$NPM_REGISTRY \
+  --build-arg PIP_INDEX_URL=$PIP_INDEX_URL \
+  --build-arg PREINSTALL_AGENTS=$PREINSTALL_AGENT \
   -t agent-sandbox:latest .
 ```
 
@@ -61,7 +61,6 @@ source .env
 第二步：确保文件夹存在
 ```bash
 mkdir -p $WORKSPACE_DIR $CONFIG_DIR $DATA_DIR
-chmod 0777 $DATA_DIR 2>/dev/null || true
 ```
 
 第三步：确保 DATA_DIR 权限正确
@@ -78,10 +77,10 @@ docker run --rm -it --init \
   --security-opt no-new-privileges:true \
   --tmpfs /var/tmp:size=64M \
   --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v "$WORKSPACE_DIR" \
-  -v "$CONFIG_DIR:/agent-config:ro" \
-  -v "$DATA_DIR:/agent-data" \
-  -v "$PWD/entrypoint.sh:/entrypoint.sh:ro" \
+  -v $WORKSPACE_DIR \
+  -v $CONFIG_DIR:/agent-config:ro \
+  -v $DATA_DIR:/agent-data \
+  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -98,10 +97,10 @@ docker run --rm -it --init \
   --security-opt no-new-privileges:true \
   --tmpfs /var/tmp:size=64M \
   --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v "$WORKSPACE_DIR" \
-  -v "$CONFIG_DIR:/agent-config:ro" \
-  -v "$DATA_DIR:/agent-data" \
-  -v "$PWD/entrypoint.sh:/entrypoint.sh:ro" \
+  -v $WORKSPACE_DIR \
+  -v $CONFIG_DIR:/agent-config:ro \
+  -v $DATA_DIR:/agent-data \
+  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
