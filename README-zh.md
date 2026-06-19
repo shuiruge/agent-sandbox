@@ -217,3 +217,12 @@ chmod 0777 ./sandbox/data
 
 - Docker Engine 24+
 - 国内网络需要配置镜像源（已在 `.env.example` 中预设）
+
+## 作者
+
+OpenCode (DeepSeek V4 Flash) + shuiruge@hotmail.com
+
+## License
+
+MIT
+

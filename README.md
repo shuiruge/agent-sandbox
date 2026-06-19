@@ -191,3 +191,12 @@ chmod 0777 ./sandbox/data
 ## Dependencies
 
 - Docker Engine 24+
+
+## Author
+
+OpenCode (DeepSeek V4 Flash) + shuiruge@hotmail.com
+
+## License
+
+MIT
+
