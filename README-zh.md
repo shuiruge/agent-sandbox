@@ -18,7 +18,6 @@ opencode-sandbox/
 ├── .env.example             ← 分发模板
 ├── Dockerfile               ← 公共运行环境 + 按需预装 agent
 ├── entrypoint.sh            ← 智能路由，挂载方式注入
-├── run.sh                   ← 运行脚本模板
 ├── README.md                ← 英文 README
 └── README-zh.md             ← 中文 README（本文件）
 ```
@@ -129,8 +128,6 @@ docker run --rm -it --init \
   agent-sandbox:latest web --hostname 0.0.0.0 --port 4096
 ```
 
-模板参见 `run.sh`。
-
 ## 切换 Agent
 
 改 `.env` 中的两行：
@@ -181,19 +178,6 @@ docker build ...
 ```
 在 PREINSTALL_AGENTS 中新增一个之前没装过的 agent
 ```
-
-## 路径定制
-
-`.env` 中的路径可指向任意宿主机绝对路径：
-
-```bash
-WORKSPACE_DIR=/home/user/projects/my-app
-CONFIG_DIR=/home/user/.config/opencode
-DATA_DIR=/mnt/ssd/opencode-data
-```
-
-> **注意**：容器以非 root 用户运行（UID 1001），因此 `DATA_DIR` 需要设为 `0777` 权限
-> 才能写入。`./run.sh` 会自动处理，若手工配置路径请手动 `chmod 0777 $DATA_DIR`。
 
 ## 新增 Agent
 

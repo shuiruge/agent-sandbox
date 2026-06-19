@@ -18,7 +18,6 @@ opencode-sandbox/
 ├── .env.example             ← Distribution template
 ├── Dockerfile               ← Common runtime + pre-installed agents
 ├── entrypoint.sh            ← Smart routing, injected via mount
-├── run.sh                   ← Run script template
 ├── README-zh.md             ← Chinese README
 └── README.md                ← English README (this file)
 ```
@@ -124,8 +123,6 @@ docker run --rm -it --init \
   agent-sandbox:latest web --hostname 0.0.0.0 --port 4096
 ```
 
-See `run.sh` for a template.
-
 ## Switching Agents
 
 Change two lines in `.env`:
@@ -155,19 +152,6 @@ and the agent is included in `PREINSTALL_AGENTS` (otherwise a rebuild is needed)
 ```
 Adding a new agent to PREINSTALL_AGENTS that wasn't installed before
 ```
-
-## Custom Paths
-
-Paths in `.env` can point to any absolute path on the host:
-
-```bash
-WORKSPACE_DIR=/home/user/projects/my-app
-CONFIG_DIR=/home/user/.config/opencode
-DATA_DIR=/mnt/ssd/opencode-data
-```
-
-> **Note**: The container runs as a non-root user (UID 1001), so `DATA_DIR` needs `0777` permissions
-> to be writable. `./run.sh` handles this automatically; if configuring paths manually, run `chmod 0777 $DATA_DIR`.
 
 ## Adding a New Agent
 
