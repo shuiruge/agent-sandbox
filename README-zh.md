@@ -49,6 +49,13 @@ cp .env.example .env
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google Generative AI API 密钥 |
 | `GITHUB_TOKEN` | GitHub 令牌 |
 
+
+加载环境变量
+
+```bash
+source .env
+```
+
 ### 2. 构建
 
 使用国内镜像构建：
@@ -58,7 +65,7 @@ docker build \
   --build-arg BASE_IMAGE=$DOCKER_BASE_IMAGE \
   --build-arg NPM_REGISTRY=$NPM_REGISTRY \
   --build-arg PIP_INDEX_URL=$PIP_INDEX_URL \
-  --build-arg PREINSTALL_AGENTS=$PREINSTALL_AGENT \
+  --build-arg PREINSTALL_AGENTS=$PREINSTALL_AGENTS \
   -t agent-sandbox:latest .
 ```
 

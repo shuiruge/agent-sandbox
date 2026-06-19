@@ -49,12 +49,18 @@ Edit `.env`. Field reference:
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google Generative AI API key |
 | `GITHUB_TOKEN` | GitHub token |
 
+Load environment
+
+```bash
+source .env
+```
+
 ### 2. Build
 
 ```bash
 docker build \
   --build-arg BASE_IMAGE=$DOCKER_BASE_IMAGE \
-  --build-arg PREINSTALL_AGENTS=$PREINSTALL_AGENT \
+  --build-arg PREINSTALL_AGENTS=$PREINSTALL_AGENTS \
   -t agent-sandbox:latest .
 ```
 
