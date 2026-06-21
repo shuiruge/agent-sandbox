@@ -34,7 +34,6 @@ RUN npm config set registry "$NPM_REGISTRY" && \
         npm install -g @githubnext/github-copilot-cli || true; \
     fi
 
-USER agent
 WORKDIR /workspace
 
 ENTRYPOINT ["/entrypoint.sh"]

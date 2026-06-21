@@ -6,7 +6,7 @@ restricting them to only access the specified working directory, unable to touch
 ## Design Principles
 
 - **Generic**: Sandbox decoupled from specific agents — just change `AGENT=` in `.env`
-- **Secure**: Container root filesystem read-only, all Linux capabilities dropped
+- **Secure**: Container root filesystem read-only, Linux capabilities restricted (CHOWN/SETUID/SETGID retained for entrypoint permission fix)
 - **Persistent**: Agent data and auth state persisted in `DATA_DIR`, not lost when container is destroyed
 - **Zero rebuild**: `entrypoint.sh` injected via mount — modify it without `docker compose build`
 
@@ -77,21 +77,13 @@ Step 2: Ensure directories exist
 mkdir -p $WORKSPACE_DIR $CONFIG_DIR $DATA_DIR
 ```
 
-Step 3: Ensure DATA_DIR permissions are correct
-```bash
-chmod 0777 $DATA_DIR 2>/dev/null || true
-```
-
-Step 4: Run Docker
+Step 3: Run Docker
 
 TUI mode:
 ```bash
 docker run --rm -it --init \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --tmpfs /var/tmp:size=64M \
-  --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v $WORKSPACE_DIR \
+  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
   -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
@@ -107,11 +99,8 @@ Web mode:
 ```bash
 docker rm -f $(docker ps -q --filter publish=4096) 2>/dev/null
 docker run --rm -it --init \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --tmpfs /var/tmp:size=64M \
-  --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v $WORKSPACE_DIR \
+  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
   -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
@@ -164,7 +153,7 @@ Adding a new agent to PREINSTALL_AGENTS that wasn't installed before
 | Measure | Effect |
 |---------|--------|
 | `read_only: true` | Container root filesystem read-only (optional — opencode TUI is incompatible with this mode, currently disabled) |
-| `cap_drop: ALL` | All Linux capabilities dropped |
+| `cap_drop: ALL` + `cap_add: CHOWN, SETUID, SETGID, AUDIT_WRITE` | All capabilities dropped except CHOWN, SETUID, SETGID, AUDIT_WRITE (entrypoint needs the first three to fix mount permissions and switch user; AUDIT_WRITE suppresses sudo audit warning) |
 | Only mount `WORKSPACE_DIR` / `CONFIG_DIR` / `DATA_DIR` | Cannot access other host files |
 | Docker socket not mounted | Cannot escape container |
 
@@ -184,6 +173,8 @@ All volume mount tables use 📖 (view only) or ✏️ (view and edit). Keep an 
 ---
 
 ### 一、Building the Image: `docker build` (≈ Building a House)
+
+> **Note:** The Dockerfile no longer uses `USER agent`. Instead, `entrypoint.sh` starts as **root**, fixes bind-mounted volume permissions (`chown`), then **drops privileges** to the `agent` user via `sudo`. This ensures the agent can always write to mounted directories regardless of host UID.
 
 An image is a **reusable template** — like a furnished house with the OS and necessary software installed. Build once, run many times.
 
@@ -227,31 +218,13 @@ docker build \
 
 #### 2.2 Security — Locks and Fences
 
-**`--cap-drop ALL`**
-- 🏠 Throw away all the toolbox keys. Even if someone inside has "admin" status, they can't turn a screw, connect a network cable, or change a lock — they can only move around the designated living room.
-- 🔧 Linux capabilities are fine-grained system privileges (~40 types, e.g. `CAP_NET_ADMIN` for network config, `CAP_SYS_ADMIN` for system management, `CAP_SYS_MODULE` for loading kernel modules). `--cap-drop ALL` removes all capabilities — even root cannot perform privileged operations.
-
-**`--security-opt no-new-privileges:true`**
-- 🏠 No climbing over the wall — a small person can't stand on someone else's shoulders to jump out. Even if `sudo` (a ladder) exists in the house, it can't be used.
-- 🔧 Prevents container processes from gaining privileges via suid binaries or `setuid()`/`setgid()` syscalls. Once set, privileges can only decrease, never increase.
+**`--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
+- 🏠 Throw away almost all the toolbox keys, but keep four essentials: a screwdriver (`chown`), a badge swapper (`setuid`), a group swapper (`setgid`), and a megaphone (`audit_write`). The entrypoint needs the first three to fix permissions and switch users; `AUDIT_WRITE` prevents `sudo` from printing a warning message.
+- 🔧 Linux capabilities are fine-grained system privileges (~40 types). `--cap-drop ALL` removes all capabilities. `--cap-add CHOWN` restores the ability to change file ownership (entrypoint.sh `chown -R agent:agent /workspace /agent-data`). `--cap-add SETUID` and `--cap-add SETGID` restore the ability to switch users (entrypoint.sh `sudo -u agent` to drop from root to the `agent` user). `--cap-add AUDIT_WRITE` allows the kernel audit subsystem to log sudo executions, suppressing the "unable to send audit message" warning.
 
 ---
 
-#### 2.3 Temporary Storage — Sticky Notes and a Desk
-
-These two parameters provide **writable temporary space** for the container. The container root filesystem may be read-only, so temporary files need a place to go.
-
-**`--tmpfs /var/tmp:size=64M`**
-- 🏠 A pad of 64MB sticky notes — write and discard. When the house is demolished, the notes auto-destruct — no disk usage, no residue.
-- 🔧 Mounts a 64MB in-memory filesystem (tmpfs) at `/var/tmp`. Data lives in RAM, not on disk, and is freed when the container stops.
-
-**`--tmpfs /home/agent:size=512M,uid=1001,gid=1001`**
-- 🏠 Agent's 512MB desk for work. `uid=1001` is the agent's employee badge number, ensuring this desk belongs to the agent.
-- 🔧 Agent home directory (entrypoint.sh:5 `export HOME="/home/agent"`), 512MB tmpfs owned by UID/GID 1001 (matching Dockerfile:16 `useradd -m -s /bin/bash agent`). Used for shell history, session cache, and other runtime state.
-
----
-
-#### 2.4 Volumes — Four Storage Cabinets
+#### 2.3 Volumes — Four Storage Cabinets
 
 Volumes **map** host directories into the container. When a program in the container reads or writes these directories, it's actually reading or writing files on the host.
 
@@ -259,14 +232,14 @@ Volumes **map** host directories into the container. When a program in the conta
 
 | Parameter | 🏠 Analogy | 🔧 Behavior | Permission |
 |-----------|-----------|-------------|------------|
-| `-v $WORKSPACE_DIR` | Yard connected to your garage — agent comes and goes in your code directory | bind mount, host path mounted to the **same absolute path** inside container | ✏️ read-write |
+| `-v $WORKSPACE_DIR:/workspace` | Yard connected to your garage — agent comes and goes in your code directory | bind mount, host $WORKSPACE_DIR mapped to `/workspace`. Entrypoint auto-fixes ownership via `chown` at startup | ✏️ read-write |
 | `-v $CONFIG_DIR:/agent-config:ro` | A read-only instruction manual — agent reads the rules but can't change them | entrypoint.sh runs `cp` or `ln -sfT` per agent branch to read config | 📖 read-only |
 | `-v $DATA_DIR:/agent-data` | Personal safe — stores chat history, login state; survives house demolition | entrypoint.sh `ln -sfT /agent-data` to agent's data directory (e.g. `~/.local/share/opencode`) | ✏️ read-write |
 | `-v $PWD/entrypoint.sh:/entrypoint.sh:ro` | Replace the house manual — change the manual without rebuilding the house | Runtime mount overrides the image's `/entrypoint.sh`, takes effect on next start | 📖 read-only |
 
 ---
 
-#### 2.5 Port — An Outside Window
+#### 2.4 Port — An Outside Window
 
 **`-p 4096:4096`**
 - 🏠 A window in the wall, numbered 4096. In web mode, you can type `http://localhost:4096` in your browser to access the agent's web interface.
@@ -274,7 +247,7 @@ Volumes **map** host directories into the container. When a program in the conta
 
 ---
 
-#### 2.6 Environment Variables — Sticky Notes on the Door
+#### 2.5 Environment Variables — Sticky Notes on the Door
 
 Environment variables are key-value pairs passed to the container with `-e`. Think of them as sticky notes on the door — the agent reads them upon entry.
 
@@ -295,11 +268,8 @@ Environment variables are key-value pairs passed to the container with `-e`. Thi
 | `--rm` | Auto-demolish on exit | — | — |
 | `-it` | Open door + open window | — | — |
 | `--init` | Butler tini | — | — |
-| `--cap-drop ALL` | Throw away all keys | — | — |
-| `--security-opt no-new-privileges` | No climbing over walls | — | — |
-| `--tmpfs /var/tmp:size=64M` | 64MB sticky notes | — | — |
-| `--tmpfs /home/agent:size=512M` | 512MB desk | — | — |
-| `-v $WORKSPACE_DIR` | Code directory | Yard to garage | ✏️ |
+| `--cap-drop ALL --cap-add CHOWN,SETUID,SETGID,AUDIT_WRITE` | Throw away keys, keep 4 essential tools | — | — |
+| `-v $WORKSPACE_DIR:/workspace` | Code directory | Yard to garage | ✏️ |
 | `-v $CONFIG_DIR:/agent-config:ro` | Config directory | Read-only manual | 📖 |
 | `-v $DATA_DIR:/agent-data` | Data directory | Personal safe | ✏️ |
 | `-v entrypoint.sh:ro` | Startup script | Manual replacement | 📖 |
@@ -311,11 +281,11 @@ Environment variables are key-value pairs passed to the container with `-e`. Thi
 
 ### Permission denied
 
-The container runs as UID 1001 (agent). Host directories need `o+w` permission:
+The container runs as UID 1001 (agent), while host files are owned by UID 1000 (your host user). The entrypoint automatically fixes this at startup via `chown -R agent:agent /workspace /agent-data`. No manual `chmod` needed.
 
-```bash
-chmod 0777 ./sandbox/data
-```
+If you still see permission errors, make sure:
+1. The container was started with `--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID` (required for the entrypoint's permission fix)
+2. The entrypoint.sh has execute permission: `chmod +x entrypoint.sh`
 
 ## Dependencies
 

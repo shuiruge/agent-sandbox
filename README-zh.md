@@ -6,7 +6,7 @@
 ## 设计原则
 
 - **通用**：沙箱与具体 agent 解耦，切换只需改 `.env` 中的 `AGENT=`
-- **安全**：容器根文件系统只读，丢弃所有 Linux 能力
+- **安全**：容器根文件系统只读，限制 Linux 能力（保留 CHOWN/SETUID/SETGID 用于 entrypoint 修复权限）
 - **持久**：agent 数据和认证状态持久化在 `DATA_DIR`，不随容器销毁
 - **零重建**：`entrypoint.sh` 挂载注入，修改它无需 `docker compose build`
 
@@ -82,21 +82,13 @@ source .env
 mkdir -p $WORKSPACE_DIR $CONFIG_DIR $DATA_DIR
 ```
 
-第三步：确保 DATA_DIR 权限正确
-```bash
-chmod 0777 $DATA_DIR 2>/dev/null || true
-```
-
-第四步：运行 Docker
+第三步：运行 Docker
 
 TUI 模式：
 ```bash
 docker run --rm -it --init \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --tmpfs /var/tmp:size=64M \
-  --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v $WORKSPACE_DIR \
+  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
   -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
@@ -112,11 +104,8 @@ Web 模式：
 ```bash
 docker rm -f $(docker ps -q --filter publish=4096) 2>/dev/null
 docker run --rm -it --init \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --tmpfs /var/tmp:size=64M \
-  --tmpfs /home/agent:size=512M,uid=1001,gid=1001 \
-  -v $WORKSPACE_DIR \
+  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
   -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
@@ -190,7 +179,7 @@ docker build ...
 | 手段 | 效果 |
 |------|------|
 | `read_only: true` | 容器根文件系统只读（可选，openocode TUI 无法兼容本模式，已禁用） |
-| `cap_drop: ALL` | 丢弃所有 Linux 能力 |
+| `cap_drop: ALL` + `cap_add: CHOWN, SETUID, SETGID, AUDIT_WRITE` | 丢弃所有能力，仅保留 CHOWN/SETUID/SETGID/AUDIT_WRITE（前三者供 entrypoint 修复挂载权限和切换用户，AUDIT_WRITE 抑制 sudo audit 警告） |
 | 仅挂载 `WORKSPACE_DIR` / `CONFIG_DIR` / `DATA_DIR` | 无法访问宿主机其他文件 |
 | 不挂载 Docker socket | 无法逃逸 |
 
@@ -210,6 +199,8 @@ docker build ...
 ---
 
 ### 一、做镜像：`docker build`（≈ 盖房子）
+
+> **注意：** Dockerfile 不再使用 `USER agent`。`entrypoint.sh` 改为以 **root** 启动，修复挂载卷权限（`chown`），然后通过 `sudo` **降权** 为 `agent` 用户运行 agent。这样可以确保无论宿主机 UID 是什么，agent 都能写入挂载目录。
 
 镜像是一个**可复用的模板**，相当于装好操作系统和必要软件的"毛坯房"。一次构建，多次启动。
 
@@ -253,31 +244,13 @@ docker build \
 
 #### 2.2 安全防护——防贼防盗
 
-**`--cap-drop ALL`**
-- 🏠 把家里所有工具箱的钥匙都扔掉。房子里的人即使有"管理员"身份，也拧不了螺丝、接不了网线、换不了门锁，只能在划定的客厅里活动。
-- 🔧 Linux capabilities 是系统赋予进程的特权（约 40 种，如 `CAP_NET_ADMIN` 网络配置、`CAP_SYS_ADMIN` 系统管理、`CAP_SYS_MODULE` 加载内核模块等）。`--cap-drop ALL` 丢弃全部 capability，即使以 root 运行也无法执行任何特权操作。
-
-**`--security-opt no-new-privileges:true`**
-- 🏠 禁止攀爬翻墙——小人不能踩在别人肩膀上跳出去。即使房子里有 `sudo` 这个梯子，也用不了。
-- 🔧 阻止容器内进程通过执行 suid 二进制文件或调用 `setuid()`/`setgid()` 系统调用来提升权限。从进程创建到生命周期结束，权限只降不升。
+**`--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
+- 🏠 扔掉几乎所有工具箱钥匙，但保留四样必需品：一把螺丝刀（`chown`）、一个工牌切换器（`setuid`）、一个群组切换器（`setgid`）和一个麦克风（`audit_write`）。前三样给 entrypoint 用来修复权限和切换用户，`AUDIT_WRITE` 阻止 `sudo` 打印烦人的警告。
+- 🔧 Linux capabilities 是系统赋予进程的特权（约 40 种）。`--cap-drop ALL` 丢弃全部 capability。`--cap-add CHOWN` 恢复修改文件属主的能力（entrypoint.sh 中 `chown -R agent:agent /workspace /agent-data`）。`--cap-add SETUID` 和 `--cap-add SETGID` 恢复切换用户的能力（entrypoint.sh 中 `sudo -u agent` 从 root 降权为 agent）。`--cap-add AUDIT_WRITE` 允许内核审计子系统记录 sudo 操作，抑制 "unable to send audit message" 警告。
 
 ---
 
-#### 2.3 临时存储——便签纸和书桌
-
-这两个参数给容器提供**可写的临时空间**。容器根文件系统可能是只读的，临时文件需要地方存放。
-
-**`--tmpfs /var/tmp:size=64M`**
-- 🏠 给你一沓 64MB 的便签纸，写满就扔。房子拆了便签纸自动销毁，不占磁盘空间、不残留。
-- 🔧 在 `/var/tmp` 挂载 64MB 内存文件系统（tmpfs），数据写入内存而非磁盘，容器停止后自动释放。
-
-**`--tmpfs /home/agent:size=512M,uid=1001,gid=1001`**
-- 🏠 agent 的 512MB 大书桌，办公用的。`uid=1001` 是 agent 的工牌号，确保这张桌子确实是 agent 本人的。
-- 🔧 agent 家目录（entrypoint.sh:5 `export HOME="/home/agent"`），512MB tmpfs，属主为 UID/GID 1001（与 Dockerfile:16 `useradd -m -s /bin/bash agent` 创建的 agent 用户一致）。用于存放 shell 历史、会话缓存等运行时状态。
-
----
-
-#### 2.4 数据卷（Volume）——四个储物柜
+#### 2.3 数据卷（Volume）——四个储物柜
 
 数据卷是将宿主机上的目录**映射**到容器内部的技术。容器里的程序读写这个目录，实际上就是在读写宿主机上的文件。
 
@@ -285,14 +258,14 @@ docker build \
 
 | 参数 | 🏠 类比 | 🔧 行为 | 权限 |
 |------|---------|---------|------|
-| `-v $WORKSPACE_DIR` | 院子通向你的车库 — agent 直接进出你的代码目录 | bind mount，宿主机路径挂载到容器内**同名绝对路径** | ✏️ 能看能改 |
+| `-v $WORKSPACE_DIR:/workspace` | 院子通向你的车库 — agent 直接进出你的代码目录 | bind mount，宿主机 $WORKSPACE_DIR 映射到容器内 `/workspace`。entrypoint 启动时自动通过 `chown` 修复属主 | ✏️ 能看能改 |
 | `-v $CONFIG_DIR:/agent-config:ro` | 一本只允许看的说明书 — agent 读规则，但改不了规则 | entrypoint.sh 根据不同 agent 分支执行 `cp` 或 `ln -sfT` 读配置 | 📖 只看 |
 | `-v $DATA_DIR:/agent-data` | 私人保险柜 — 存对话历史、登录状态，拆房也不丢 | entrypoint.sh `ln -sfT /agent-data` 到 agent 的数据目录（如 `~/.local/share/opencode`） | ✏️ 能看能改 |
 | `-v $PWD/entrypoint.sh:/entrypoint.sh:ro` | 替换房屋使用手册 — 改了手册不用重建房子 | 运行时 mount 覆盖镜像内 `/entrypoint.sh`，下次启动立即生效 | 📖 只看 |
 
 ---
 
-#### 2.5 端口——对外窗口
+#### 2.4 端口——对外窗口
 
 **`-p 4096:4096`**
 - 🏠 墙上开了个窗，号码是 4096。Web 模式下你可以在浏览器输入 `http://localhost:4096` 访问 agent 的网页界面。
@@ -300,7 +273,7 @@ docker build \
 
 ---
 
-#### 2.6 环境变量——贴便签
+#### 2.5 环境变量——贴便签
 
 环境变量是用 `-e` 传给容器的键值对，相当于在门上贴便签，agent 一进门就能看到。
 
@@ -321,11 +294,8 @@ docker build \
 | `--rm` | 退房自动拆 | — | — |
 | `-it` | 开门+开窗 | — | — |
 | `--init` | 管家 tini | — | — |
-| `--cap-drop ALL` | 扔掉所有钥匙 | — | — |
-| `--security-opt no-new-privileges` | 禁止攀爬翻墙 | — | — |
-| `--tmpfs /var/tmp:size=64M` | 64MB 便签纸 | — | — |
-| `--tmpfs /home/agent:size=512M` | 512MB 书桌 | — | — |
-| `-v $WORKSPACE_DIR` | 代码目录 | 院子通车库 | ✏️ |
+| `--cap-drop ALL --cap-add CHOWN,SETUID,SETGID,AUDIT_WRITE` | 扔钥匙，留 4 样工具 | — | — |
+| `-v $WORKSPACE_DIR:/workspace` | 代码目录 | 院子通车库 | ✏️ |
 | `-v $CONFIG_DIR:/agent-config:ro` | 配置目录 | 只许看的说明书 | 📖 |
 | `-v $DATA_DIR:/agent-data` | 数据目录 | 私人保险柜 | ✏️ |
 | `-v entrypoint.sh:ro` | 启动脚本 | 使用手册替换 | 📖 |
@@ -337,11 +307,11 @@ docker build \
 
 ### Permission denied
 
-容器以 UID 1001 (agent) 运行，宿主机目录需要 `o+w` 权限：
+容器内 `agent` 用户的 UID 为 1001，宿主机文件属主为 UID 1000。entrypoint 会在启动时自动通过 `chown -R agent:agent /workspace /agent-data` 修复权限，无需手动 `chmod`。
 
-```bash
-chmod 0777 ./sandbox/data
-```
+如果仍然遇到权限错误，请检查：
+1. 容器启动时是否正确传入了 `--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID`（entrypoint 修复权限需要这些能力）
+2. entrypoint.sh 是否有执行权限：`chmod +x entrypoint.sh`
 
 ## 依赖
 

@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Phase 1: root initialization — fix bind-mounted volume permissions,
+#           then drop privileges to agent for the rest
+if [ "$(id -u)" = "0" ]; then
+    chown -R agent:agent /workspace /agent-data 2>/dev/null || true
+    exec sudo -E -u agent -H "$0" "$@"
+fi
+
 AGENT="${AGENT:-opencode}"
 export HOME="/home/agent"
 
