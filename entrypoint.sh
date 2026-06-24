@@ -4,7 +4,13 @@ set -e
 # Phase 1: root initialization — fix bind-mounted volume permissions,
 #           then drop privileges to agent for the rest
 if [ "$(id -u)" = "0" ]; then
-    chown -R agent:agent /workspace /agent-data 2>/dev/null || true
+    HOST_UID="${HOST_UID:-1000}"
+
+    userdel -r agent 2>/dev/null || true
+    userdel -r ubuntu 2>/dev/null || true
+    groupadd -f agent
+    useradd -m -u "$HOST_UID" -g agent -s /bin/bash agent
+    chown -R agent:agent /workspace /agent-data /home/agent
     exec sudo -E -u agent -H "$0" "$@"
 fi
 

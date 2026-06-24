@@ -87,11 +87,11 @@ mkdir -p $WORKSPACE_DIR $CONFIG_DIR $DATA_DIR
 TUI 模式：
 ```bash
 docker run --rm -it --init \
-  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
   -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
-  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
+  -e HOST_UID=$(id -u) \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -104,11 +104,11 @@ Web 模式：
 ```bash
 docker rm -f $(docker ps -q --filter publish=4096) 2>/dev/null
 docker run --rm -it --init \
-  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
   -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
-  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
+  -e HOST_UID=$(id -u) \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -179,7 +179,7 @@ docker build ...
 | 手段 | 效果 |
 |------|------|
 | `read_only: true` | 容器根文件系统只读（可选，openocode TUI 无法兼容本模式，已禁用） |
-| `cap_drop: ALL` + `cap_add: CHOWN, SETUID, SETGID, AUDIT_WRITE` | 丢弃所有能力，仅保留 CHOWN/SETUID/SETGID/AUDIT_WRITE（前三者供 entrypoint 修复挂载权限和切换用户，AUDIT_WRITE 抑制 sudo audit 警告） |
+| `cap_drop: ALL` + `cap_add: CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID, AUDIT_WRITE` | 丢弃所有能力，仅保留 CHOWN/FOWNER/DAC_OVERRIDE/SETUID/SETGID/AUDIT_WRITE（前五者供 entrypoint 修复权限和切换用户，AUDIT_WRITE 抑制 sudo audit 警告） |
 | 仅挂载 `WORKSPACE_DIR` / `CONFIG_DIR` / `DATA_DIR` | 无法访问宿主机其他文件 |
 | 不挂载 Docker socket | 无法逃逸 |
 
@@ -244,9 +244,9 @@ docker build \
 
 #### 2.2 安全防护——防贼防盗
 
-**`--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
-- 🏠 扔掉几乎所有工具箱钥匙，但保留四样必需品：一把螺丝刀（`chown`）、一个工牌切换器（`setuid`）、一个群组切换器（`setgid`）和一个麦克风（`audit_write`）。前三样给 entrypoint 用来修复权限和切换用户，`AUDIT_WRITE` 阻止 `sudo` 打印烦人的警告。
-- 🔧 Linux capabilities 是系统赋予进程的特权（约 40 种）。`--cap-drop ALL` 丢弃全部 capability。`--cap-add CHOWN` 恢复修改文件属主的能力（entrypoint.sh 中 `chown -R agent:agent /workspace /agent-data`）。`--cap-add SETUID` 和 `--cap-add SETGID` 恢复切换用户的能力（entrypoint.sh 中 `sudo -u agent` 从 root 降权为 agent）。`--cap-add AUDIT_WRITE` 允许内核审计子系统记录 sudo 操作，抑制 "unable to send audit message" 警告。
+**`--cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
+- 🏠 扔掉几乎所有工具箱钥匙，但保留六样必需品：一把螺丝刀（`chown`）、一把开锁器（`fowner`）、一把万能钥匙（`dac_override`）、一个工牌切换器（`setuid`）、一个群组切换器（`setgid`）和一个麦克风（`audit_write`）。`FOWNER` 允许修改他人文件的属主；`DAC_OVERRIDE` 让 entrypoint 能删除冲突用户（如基础镜像中的 `ubuntu`）并修复 home 目录属主。
+- 🔧 Linux capabilities 是系统赋予进程的特权（约 40 种）。`--cap-drop ALL` 丢弃全部 capability。`--cap-add CHOWN` 恢复修改文件属主的能力；`--cap-add FOWNER` 允许修改他人拥有的文件的属主（`useradd -m` 和 `chown` 修复 home 目录时需要此能力）。`--cap-add DAC_OVERRIDE` 绕过常规 DAC 权限检查，供 `userdel -r` 遍历并删除旧的 home 目录。`--cap-add SETUID` 和 `--cap-add SETGID` 恢复切换用户的能力（entrypoint.sh 中 `sudo -u agent` 从 root 降权为 agent）。`--cap-add AUDIT_WRITE` 允许内核审计子系统记录 sudo 操作，抑制 "unable to send audit message" 警告。
 
 ---
 
@@ -281,6 +281,10 @@ docker build \
 - 🏠 门上贴便签告诉 agent："你是 opencode"（或 claude、copilot 等）。agent 看到后按规则行事。
 - 🔧 entrypoint.sh:4 `AGENT="${AGENT:-opencode}"`，第 11 行 `case "$AGENT" in` 根据值选择初始化逻辑。
 
+**`-e HOST_UID=$(id -u)`**
+- 🏠 告诉房子你的 UID，entrypoint 据此重建 `agent` 用户并匹配你的 UID，文件属主就是你——无需 `sudo`。
+- 🔧 默认 `1000`。entrypoint 先删后重建 `agent` 用户，然后 `chown` 数据卷。
+
 **`-e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY`**
 - 🏠 门上贴便签写 API Key，agent 看到后拿去调用 AI 服务。
 - 🔧 agent 进程运行时读取环境变量，用于 API 鉴权。同理还有 `OPENAI_API_KEY`、`GOOGLE_GENERATIVE_AI_API_KEY`。
@@ -294,12 +298,12 @@ docker build \
 | `--rm` | 退房自动拆 | — | — |
 | `-it` | 开门+开窗 | — | — |
 | `--init` | 管家 tini | — | — |
-| `--cap-drop ALL --cap-add CHOWN,SETUID,SETGID,AUDIT_WRITE` | 扔钥匙，留 4 样工具 | — | — |
+| `--cap-drop ALL --cap-add CHOWN,FOWNER,DAC_OVERRIDE,SETUID,SETGID,AUDIT_WRITE` | 扔钥匙，留 6 样工具 | — | — |
 | `-v $WORKSPACE_DIR:/workspace` | 代码目录 | 院子通车库 | ✏️ |
 | `-v $CONFIG_DIR:/agent-config:ro` | 配置目录 | 只许看的说明书 | 📖 |
 | `-v $DATA_DIR:/agent-data` | 数据目录 | 私人保险柜 | ✏️ |
-| `-v entrypoint.sh:ro` | 启动脚本 | 使用手册替换 | 📖 |
 | `-p 4096:4096` | Web 窗口 | 墙上开窗 | — |
+| `-e HOST_UID` | 对齐宿主机 UID | 钥匙配锁 | — |
 | `-e AGENT` | 告诉 agent 你是谁 | 门贴便签 | — |
 | `-e API_KEY` | 告诉 agent API Key | 门贴便签 | — |
 
@@ -310,7 +314,7 @@ docker build \
 容器内 `agent` 用户的 UID 为 1001，宿主机文件属主为 UID 1000。entrypoint 会在启动时自动通过 `chown -R agent:agent /workspace /agent-data` 修复权限，无需手动 `chmod`。
 
 如果仍然遇到权限错误，请检查：
-1. 容器启动时是否正确传入了 `--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID`（entrypoint 修复权限需要这些能力）
+1. 容器启动时是否正确传入了 `--cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID`（entrypoint 修复权限需要这些能力）
 2. entrypoint.sh 是否有执行权限：`chmod +x entrypoint.sh`
 
 ## 依赖

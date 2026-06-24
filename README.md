@@ -82,11 +82,11 @@ Step 3: Run Docker
 TUI mode:
 ```bash
 docker run --rm -it --init \
-  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
   -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
-  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
+  -e HOST_UID=$(id -u) \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -99,11 +99,11 @@ Web mode:
 ```bash
 docker rm -f $(docker ps -q --filter publish=4096) 2>/dev/null
 docker run --rm -it --init \
-  --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
+  --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE \
   -v $WORKSPACE_DIR:/workspace \
   -v $CONFIG_DIR:/agent-config:ro \
   -v $DATA_DIR:/agent-data \
-  -v $PWD/entrypoint.sh:/entrypoint.sh:ro \
+  -e HOST_UID=$(id -u) \
   -p 4096:4096 \
   -e AGENT=$AGENT \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -153,7 +153,7 @@ Adding a new agent to PREINSTALL_AGENTS that wasn't installed before
 | Measure | Effect |
 |---------|--------|
 | `read_only: true` | Container root filesystem read-only (optional — opencode TUI is incompatible with this mode, currently disabled) |
-| `cap_drop: ALL` + `cap_add: CHOWN, SETUID, SETGID, AUDIT_WRITE` | All capabilities dropped except CHOWN, SETUID, SETGID, AUDIT_WRITE (entrypoint needs the first three to fix mount permissions and switch user; AUDIT_WRITE suppresses sudo audit warning) |
+| `cap_drop: ALL` + `cap_add: CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID, AUDIT_WRITE` | All capabilities dropped except CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID, AUDIT_WRITE (entrypoint needs CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID to fix permissions and switch user; AUDIT_WRITE suppresses sudo audit warning) |
 | Only mount `WORKSPACE_DIR` / `CONFIG_DIR` / `DATA_DIR` | Cannot access other host files |
 | Docker socket not mounted | Cannot escape container |
 
@@ -218,9 +218,9 @@ docker build \
 
 #### 2.2 Security — Locks and Fences
 
-**`--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
-- 🏠 Throw away almost all the toolbox keys, but keep four essentials: a screwdriver (`chown`), a badge swapper (`setuid`), a group swapper (`setgid`), and a megaphone (`audit_write`). The entrypoint needs the first three to fix permissions and switch users; `AUDIT_WRITE` prevents `sudo` from printing a warning message.
-- 🔧 Linux capabilities are fine-grained system privileges (~40 types). `--cap-drop ALL` removes all capabilities. `--cap-add CHOWN` restores the ability to change file ownership (entrypoint.sh `chown -R agent:agent /workspace /agent-data`). `--cap-add SETUID` and `--cap-add SETGID` restore the ability to switch users (entrypoint.sh `sudo -u agent` to drop from root to the `agent` user). `--cap-add AUDIT_WRITE` allows the kernel audit subsystem to log sudo executions, suppressing the "unable to send audit message" warning.
+**`--cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --cap-add AUDIT_WRITE`**
+- 🏠 Throw away almost all the toolbox keys, but keep six essentials: a screwdriver (`chown`), a key cutter (`fowner`), a master key (`dac_override`), a badge swapper (`setuid`), a group swapper (`setgid`), and a megaphone (`audit_write`). `FOWNER` allows chown'ing files owned by others; `DAC_OVERRIDE` lets the entrypoint delete conflicting users (like `ubuntu` on the base image) and traverse home directories.
+- 🔧 Linux capabilities are fine-grained system privileges (~40 types). `--cap-drop ALL` removes all capabilities. `--cap-add CHOWN` restores the ability to change file ownership; `--cap-add FOWNER` allows changing ownership of files owned by another user (required for `useradd -m` and `chown` to fix home directory ownership after rebuilding the `agent` user). `--cap-add DAC_OVERRIDE` bypasses general DAC checks, needed by `userdel -r` to traverse and delete the old home directory. `--cap-add SETUID` and `--cap-add SETGID` restore the ability to switch users (entrypoint.sh `sudo -u agent` to drop from root to the `agent` user). `--cap-add AUDIT_WRITE` allows the kernel audit subsystem to log sudo executions, suppressing the "unable to send audit message" warning.
 
 ---
 
@@ -255,6 +255,10 @@ Environment variables are key-value pairs passed to the container with `-e`. Thi
 - 🏠 A sticky note on the door tells the agent: "You are opencode" (or claude, copilot, etc.). The agent follows the instructions accordingly.
 - 🔧 entrypoint.sh:4 `AGENT="${AGENT:-opencode}"`, line 11 `case "$AGENT" in` selects initialization logic.
 
+**`-e HOST_UID=$(id -u)`**
+- 🏠 Tell the house your UID so the entrypoint recreates the `agent` user with a matching UID. Files on the host then belong to you — no `sudo` needed.
+- 🔧 Defaults to `1000`. Entrypoint deletes and recreates the `agent` user with UID=`$HOST_UID`, then `chown`s volumes.
+
 **`-e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY`**
 - 🏠 A sticky note with the API key. The agent reads it and uses it to call the AI service.
 - 🔧 The agent process reads environment variables at runtime for API authentication. Same applies to `OPENAI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY`.
@@ -268,12 +272,12 @@ Environment variables are key-value pairs passed to the container with `-e`. Thi
 | `--rm` | Auto-demolish on exit | — | — |
 | `-it` | Open door + open window | — | — |
 | `--init` | Butler tini | — | — |
-| `--cap-drop ALL --cap-add CHOWN,SETUID,SETGID,AUDIT_WRITE` | Throw away keys, keep 4 essential tools | — | — |
+| `--cap-drop ALL --cap-add CHOWN,FOWNER,DAC_OVERRIDE,SETUID,SETGID,AUDIT_WRITE` | Throw away keys, keep 6 essential tools | — | — |
 | `-v $WORKSPACE_DIR:/workspace` | Code directory | Yard to garage | ✏️ |
 | `-v $CONFIG_DIR:/agent-config:ro` | Config directory | Read-only manual | 📖 |
 | `-v $DATA_DIR:/agent-data` | Data directory | Personal safe | ✏️ |
-| `-v entrypoint.sh:ro` | Startup script | Manual replacement | 📖 |
 | `-p 4096:4096` | Web window | Window in wall | — |
+| `-e HOST_UID` | Match host UID | Key to door lock | — |
 | `-e AGENT` | Tell agent its role | Sticky note | — |
 | `-e API_KEY` | Tell agent the API key | Sticky note | — |
 
@@ -284,7 +288,7 @@ Environment variables are key-value pairs passed to the container with `-e`. Thi
 The container runs as UID 1001 (agent), while host files are owned by UID 1000 (your host user). The entrypoint automatically fixes this at startup via `chown -R agent:agent /workspace /agent-data`. No manual `chmod` needed.
 
 If you still see permission errors, make sure:
-1. The container was started with `--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID` (required for the entrypoint's permission fix)
+1. The container was started with `--cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID` (required for the entrypoint's permission fix)
 2. The entrypoint.sh has execute permission: `chmod +x entrypoint.sh`
 
 ## Dependencies
