@@ -28,12 +28,6 @@ USER dev
 ENV USER=dev
 WORKDIR /home/dev
 
-# 配置 Git 全局设置 (关键步骤)
-# 必须在切换到 USER dev 之后执行，这样配置才会写入 /home/dev/.gitconfig
-#RUN git config --global user.email "dev@container.local" && \
-#    git config --global user.name "Dev User" && \
-#    git config --global init.defaultBranch main
-
 # 预配置 Nix (加速源 + Flakes)
 RUN mkdir -p /home/dev/.config/nix && \
     echo "experimental-features = nix-command flakes" > /home/dev/.config/nix/nix.conf && \
